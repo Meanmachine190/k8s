@@ -1,0 +1,252 @@
+
+
+
+open commond promt
+ssh -p2324 arshad@localhost
+vi /etc/netplan/00-installer-config.yaml
+change true - false :wq!
+open gitbash in desktop 
+ssh -p2324 arshad@localhost
+vi /etc/netplan/00-installer-config.yaml
+replace the content with this
+# This is the network config written by 'subiquity'
+network:
+  ethernets:
+    enp0s3:
+      dhcp4: false
+      addresses: [192.168.1.240/24]
+      routes:
+         - to: default
+           via: 192.168.1.1
+      nameservers:
+        addresses: [8.8.8.8, 8.8.4.4]
+  version: 2
+
+cat > /etc/modules-load.d/containerd.cong <<EOF
+overlay
+br_netfiller
+EOF
+
+cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
+overlay
+br_netfilter
+EOF
+
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# sysctl params required by setup, params persist across reboots
+cat > /etc/sysctl.d/99-kubernetes-cri.conf <<EOF
+net.bridge.bridge-nf-call-iptables  = 1
+net.ipv4.ip_forward                 = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+EOF
+
+# Apply sysctl params without reboot
+sudo sysctl --system
+
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o/etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+
+## Install containerd
+apt-get install -y containerd.io
+# Configure containerd
+mkdir -p /etc/containerd
+containerd config default > /etc/containerd/config.toml
+sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+# Restart containerd
+systemctl restart containerd
+systemctl status containerd
+
+# To execute crictl CLI commands, ensure we create a configuration
+file as mentioned below
+cat > /etc/crictl.yaml <<EOF
+runtime-endpoint: unix:///run/containerd/containerd.sock
+image-endpoint: unix:///run/containerd/containerd.sock
+timeout: 2
+EOF
+
+install kubeadm
+
+sudo apt-get install -y apt-transport-https ca-certificates curl gpg
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+sudo apt-get update
+sudo apt-get install -y kubelet kubeadm kubectl
+sudo apt-mark hold kubelet kubeadm kubectl
+ 
+till it was for all nodes as well as master
+
+swapoff -a
+
+sudo kubeadm init --pod-network-cidr=10.244.0.0/16  ( only for master)
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+   (only for master)
+
+wget  https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/custom-resources.yaml
+
+vi custom-resources.yaml
+change the ip to 10.244.0.0/16
+save and exit
+ 
+kubectl create -f custom-resources.yaml
+
+kubectl get nodes
+
+upto here we succesfully setup VM
+             installed ubuntu OS
+             instaleed kubernets
+             made master server
+             no nodes
+             
+
+kubectl edit node arshad(name of cluster)
+remove some lines 
+ taints:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+
+vi pods.yml
+
+apiVersion: v1
+kind: Pod
+metadata:
+name: nginx
+labels:
+name: nginx
+spec:
+containers:
+- name: nginx
+image: nginx
+ports:
+- containerPort: 80
+name: http
+protocol: TCP
+
+kubectl create -f pods.yml 
+kubectl get pods
+
+
+Lect 04 
+
+google amazon eks networking
+create a vpc for your amazon EKS cluster
+only public subnet
+https://s3.us-west-2.amazonaws.com/amazon-eks/cloudformation/2020-10-29/amazon-eks-vpc-sample.yaml
+
+open aws 
+cloud fromation
+create stack
+paste the above url here
+name it
+next 
+submit
+wait for activation
+now in VPC you can see a new vpc created
+in aws go to EKS
+create a cluster
+kubernetes version 1.28
+create a new role in IAM 
+ aws service
+ EKS cluster  next
+ name it save it
+Now select the same role in EKS  next
+select the vpc                   next
+select the security group
+public and private               next
+select all                       next
+				 next
+				 create
+
+Create a EC2 instance 
+ubuntu 20.004
+key pair 
+existing securioty group
+create 
+opne it in git bash
+sudo -i
+apt update
+      Install Kubectl with below commands
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version --client  
+              Install AWS CLI in K8S_Client_Machine with below commands
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip
+sudo yum install unzip
+unzip awscliv2.zip  
+sudo ./aws/install
+
+aws configure
+In AWS, security credentials, create a new key, copy and paste it in git bash below aws configure
+give the region name ex- ap-south-1  for mumbai
+
+aws eks list-clusters
+ls ~/.
+aws eks update-kubeconfig --name EKScluster --region ap-south-1
+                                 (cluster name)      (region name)
+  Create IAM role for EKS worker nodes (usecase as EC2) with below policies
+a) AmazonEKSWorkerNodePolicy
+b) AmazonEKS_CNI_Policy
+c) AmazonEC2ContainerRegistryReadOnly
+i.e  open IAM in aws
+     new role
+     aws service 
+     ec2 case 
+     give access to service mentioned above
+     give a role name 
+      
+in EKS cluster 
+open compute 
+add node group
+give anme
+select role recently made
+next
+AMI type Amazon Linux 2 (AL2 -x86-64)
+on demand
+t3 medium
+20
+2
+2
+5
+next
+select subnets
+next
+create
+now wait sometime
+in EC2 you can see two new instance has been created as t3 medium
+
+now in alreaddy running bitbash 
+kubectl get nodes
+vi pods.yml
+ apiVersion: v1
+kind: Pod
+metadata:
+name: nginx
+labels:
+name: nginx
+spec:
+containers:
+- name: nginx
+image: nginx
+ports:
+- containerPort: 80
+name: http
+protocol: TCP
+:wq!
+kubectl create -f pods.yml
+kubectl get pod -o wide
